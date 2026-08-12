@@ -1,0 +1,10 @@
+# homelab-template-core/CODEOWNERS
+# Standard administrative code ownership for homelab repositories.
+# Enforced via branch protection rules (require_code_owner_reviews = true).
+
+# By default, you own the entire codebase
+*                      @alsamwright42
+
+# Specializations (As you scale, you can assign folder subsets to other handles):
+# /scripts/workstation/  @alsamwright42
+# /manifests/            @alsamwright42

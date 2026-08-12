@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# githooks/commit-msg.d/01-enforce-ab-syntax
+# Enforces the presence of 'AB#<WorkItemId>' inside commit messages to ensure traceability.
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Bypass verification for automatic merge commits or system automated tasks (to prevent pipeline deadlock)
+if [[ "$COMMIT_MSG" =~ ^Merge[[:space:]] ]] || \
+   [[ "$COMMIT_MSG" =~ ^chore\(ci\): ]] || \
+   [[ "$COMMIT_MSG" =~ ^docs\(sync\): ]] || \
+   [[ "$COMMIT_MSG" =~ ^release/ ]] || \
+   [[ "$COMMIT_MSG" =~ ^Revert[[:space:]] ]]; then
+    exit 0
+fi
+
+# Check if commit message contains Azure Boards ticket reference (AB#<number>)
+if [[ ! "$COMMIT_MSG" =~ AB\\#[0-9]+ ]]; then
+    echo "===============================================================================" >&2
+    echo "❌ [Git Hook Error] Commit blocked due to missing Work Item reference!" >&2
+    echo "===============================================================================" >&2
+    echo "Your commit message:" >&2
+    echo "-------------------------------------------------------------------------------" >&2
+    echo "$COMMIT_MSG" >&2
+    echo "-------------------------------------------------------------------------------" >&2
+    echo "👉 Every active commit in this repository must align with our Dual-Plane SDLC." >&2
+    echo "   You must specify an Azure Boards Work Item ID using the 'AB#ID' tag." >&2
+    echo "   " >&2
+    echo "   Format Syntax Examples:" >&2
+    echo "     - \"feat(infra): integrate external dns webhook AB#104\"" >&2
+    echo "     - \"fix: resolve trailing space inside bootstrap config (closes AB#42)\"" >&2
+    echo "===============================================================================" >&2
+    exit 1
+fi

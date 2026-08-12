@@ -1,0 +1,15 @@
+# Force Git to normalize all text files to LF on commit
+* text=auto eol=lf
+
+# Explicitly enforce LF for script and configuration assets
+*.sh text eol=lf
+*.tf text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+
+# Protect binary assets from normalization corruption
+*.png binary
+*.jpg binary
+*.tar.gz binary
+*.zip binary

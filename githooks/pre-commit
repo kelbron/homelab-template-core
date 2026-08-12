@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# templates/githooks/pre-commit
+# Decoupled pre-commit orchestrator file.
+# Synthesized by Git Governance Plane to run all sub-hooks in pre-commit.d/
+
+set -euo pipefail
+
+# Force clean environment locale configuration
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUB_HOOKS_DIR="${HOOK_DIR}/pre-commit.d"
+
+echo "⚓ [Git Hook] Initiating pre-commit sequence..."
+if [ -d "$SUB_HOOKS_DIR" ]; then
+    for hook in "${SUB_HOOKS_DIR}"/*; do
+        # Ignore files that are not valid filenames
+        [[ "$(basename "$hook")" =~ ^[0-9a-zA-Z_-]+$ ]] || continue
+        if [ -x "$hook" ]; then
+            echo "⚡ Running pre-commit task: $(basename "$hook")"
+            "$hook"
+        else
+            echo "⚠️  Skipping non-executable task: $(basename "$hook")"
+        fi
+    done
+fi
+echo "✅ Pre-commit sequence finalized."

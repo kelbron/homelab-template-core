@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+COMMIT_MSG_FILE="$1"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUB_HOOKS_DIR="${HOOK_DIR}/commit-msg.d"
+
+if [ -d "$SUB_HOOKS_DIR" ]; then
+    for hook in "${SUB_HOOKS_DIR}"/*; do
+        [[ "$(basename "$hook")" =~ ^[0-9a-zA-Z_-]+$ ]] || continue
+        if [ -x "$hook" ]; then
+            "$hook" "$COMMIT_MSG_FILE"
+        fi
+    done
+fi
