@@ -95,7 +95,7 @@ check-workstation-tools: ## Validate if required binaries are present on disk
 	@echo "🔎 Auditing workstation binary toolchain..."
 	@failed=0; \
 	for tool in $(REQUIRED_TOOLS); do \
-		if ! command -v $$tool &> /dev/null; then \
+		if ! command -v $$tool > /dev/null 2>&1; then \
 			echo "⚠️  WARNING: '$$tool' is missing on this workstation."; \
 		else \
 			echo "✅ $$tool is present."; \
