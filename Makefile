@@ -9,14 +9,19 @@
 # their own specific tools (e.g., REQUIRED_TOOLS += terraform or REQUIRED_TOOLS += mvnw).
 REQUIRED_TOOLS ?= shellcheck git
 
-## [Optional] Target environment profile. Maps to any 'inventory/<name>.env' file. Default: local
-PROFILE ?= local
-## [Optional] Bypass safety checks and run-once safety locks. Choices: [true, false]. Default: false
-FORCE ?= false
-## [Optional] CI/CD Mode. Bypasses local file-sourcing. Choices: [true, false]. Default: false
-CI ?= false 		  
-## [Optional] Enable environment variable profile loading. Choices: [true, false]. Default: false
-USE_PROFILES ?= false
+PROFILE ?= local		## [Optional] Target environment profile. Maps to any 'inventory/<name>.env' file. Default: local
+FORCE ?= false			## [Optional] Bypass safety checks and run-once safety locks. Choices: [true, false]. Default: false
+CI ?= false 			## [Optional] CI/CD Mode. Bypasses local file-sourcing. Choices: [true, false]. Default: false
+USE_PROFILES ?= false	## [Optional] Enable environment variable profile loading. Choices: [true, false]. Default: false
+
+# =============================================================================
+# 🧼 WHITESPACE SANITIZER (Sanitizes trailing spaces from comments in advance)
+# =============================================================================
+# We use eager evaluation (:=) to strip trailing whitespace immediately on startup
+PROFILE      := $(strip $(PROFILE))
+FORCE        := $(strip $(FORCE))
+CI           := $(strip $(CI))
+USE_PROFILES := $(strip $(USE_PROFILES))
 
 ENV_FILE := inventory/$(PROFILE).env
 
