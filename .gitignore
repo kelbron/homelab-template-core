@@ -1,3 +1,9 @@
+# Local environment and secret overrides
+.env
+*.env
+secrets/
+*.secret.yaml
+
 # Local .terraform directories
 .terraform/
 
