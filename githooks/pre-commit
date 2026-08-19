@@ -14,15 +14,16 @@ SUB_HOOKS_DIR="${HOOK_DIR}/pre-commit.d"
 
 echo "⚓ [Git Hook] Initiating pre-commit sequence..."
 if [ -d "$SUB_HOOKS_DIR" ]; then
+    # Iterate through all files in the sub-hooks directory
     for hook in "${SUB_HOOKS_DIR}"/*; do
         # Ignore files that are not valid filenames
         [[ "$(basename "$hook")" =~ ^[0-9a-zA-Z_-]+$ ]] || continue
         if [ -x "$hook" ]; then
-            echo "⚡ Running pre-commit task: $(basename "$hook")"
+            echo "⚓ Running pre-commit task: $(basename "$hook")"
             "$hook"
         else
             echo "⚠️  Skipping non-executable task: $(basename "$hook")"
         fi
     done
 fi
-echo "✅ Pre-commit sequence finalized."
+

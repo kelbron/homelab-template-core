@@ -1,0 +1,200 @@
+# .github/workflows/ai-pr-review.yml
+name: "AI Pull Request Review"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  # =============================================================================
+  # 🔍 JOB 1: CHECK CONFIGURATION (Lightweight check for credentials)
+  # =============================================================================
+  check-credentials:
+    name: "Audit Workspace Credentials"
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.audit.outputs.enabled }}
+    steps:
+      - name: "Evaluate Secrets Store"
+        id: audit
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ GEMINI_API_KEY is absent. Skipping AI code review job."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "✅ GEMINI_API_KEY detected. AI review job scheduled."
+          fi
+
+  # =============================================================================
+  # 🤖 JOB 2: AI REVIEW ENGINE (Only runs if Job 1 outputs 'enabled=true')
+  # =============================================================================
+  ai-review:
+    name: "Perform Code Review"
+    needs: check-credentials
+    if: needs.check-credentials.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+
+    # ⚙️ Centralized File Configurations
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_DIFF_PATH: "pr_changes.diff"
+      GEMINI_OUTPUT_PATH: "review_output.json"
+      GEMINI_MODEL: "gemini-3.6-flash"
+      GEMINI_API_VERSION: "v1beta"
+
+    steps:
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }} # 🛡️ Bind checkout strictly to the PR's actual HEAD commit instead of the transient merge commit
+          fetch-depth: 0
+
+      - name: "Calculate PR Diff"
+        id: diff
+        run: |
+          # Safely get the diff between the merge base and the head of the PR branch
+          git diff origin/${{ github.base_ref }}...HEAD > "$GEMINI_DIFF_PATH"
+          echo "diff_path=$GEMINI_DIFF_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: "Set up Python Environment"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: "Consult Gemini for Code Quality & Security Review"
+        run: |
+          # Executes the companion Python script, feeding it the PR diff 
+          # Note: Underlying script query_gemini_review.py natively executes 
+          # exponential backoff with jitter on transient 503/429 errors.
+          python3 scripts/workstation/query_gemini_review.py \
+            --diff-path "$GEMINI_DIFF_PATH" \
+            --output-path "$GEMINI_OUTPUT_PATH" \
+            --model "$GEMINI_MODEL" \
+            --api-version "$GEMINI_API_VERSION"
+
+      - name: "Post Annotations to Pull Request"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = process.env.GEMINI_OUTPUT_PATH || 'review_output.json';
+
+            if (!fs.existsSync(path)) {
+              console.log(`⚠️ No review output file found at '${path}'. Skipping annotation posting.`);
+              return;
+            }
+
+            let reviewData;
+            try {
+              reviewData = JSON.parse(fs.readFileSync(path, 'utf8'));
+            } catch (err) {
+              core.setFailed(`❌ Failed to parse review JSON at '${path}': ${err.message}`);
+              return;
+            }
+
+            // 🛡️ Programmatically sort comments: CRITICAL findings are sorted to the top
+            const sortedComments = [...(reviewData.comments || [])].sort((a, b) => {
+              const severityA = (a.severity || 'WARNING').toUpperCase();
+              const severityB = (b.severity || 'WARNING').toUpperCase();
+              if (severityA === 'CRITICAL' && severityB !== 'CRITICAL') return -1;
+              if (severityA !== 'CRITICAL' && severityB === 'CRITICAL') return 1;
+              return 0;
+            });
+
+            const comments = sortedComments.map(item => {
+              const emoji = item.severity === 'CRITICAL' ? '🔴' : '🟡';
+              const sevLabel = `${emoji} **${(item.severity || 'WARNING').toUpperCase()}**`;
+              return {
+                path: item.file,
+                line: parseInt(item.line),
+                body: `${sevLabel}\n\n${item.message}`, // 📣 Prefixes emoji + bold label natively to the inline card body!,
+                side: 'RIGHT'
+              };
+            });
+
+            if (comments.length === 0) {
+              console.log("✅ No issues found by Gemini. Creating a clean-bill-of-health review.");
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                commit_id: context.payload.pull_request.head.sha, // 🛡️ Anchor review directly to the PR's HEAD commit to prevent 422 rejections
+                body: "🤖 **Gemini AI Review**: Clean bill of health! No syntax issues, credential leaks, or architectural anti-patterns detected.",
+                event: 'APPROVE'
+              });
+              return;
+            }
+
+            // 📣 Always post native workflow annotations for complete visibility in GHA Checks and Files views
+            for (const item of sortedComments) {
+              const annotationProperties = {
+                title: `AI Review: ${item.severity || 'WARNING'}`,
+                file: item.file,
+                startLine: parseInt(item.line)
+              };
+              if (item.severity === 'CRITICAL') {
+                core.error(item.message, annotationProperties);
+              } else {
+                core.warning(item.message, annotationProperties);
+              }
+            }
+
+            console.log(`Publishing ${comments.length} line-by-line annotations from '${path}'...`);
+            
+            // 🛡️ Self-healing Fallback Loop (Handles 422 Unprocessable Entity for offset lines)
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                commit_id: context.payload.pull_request.head.sha, // 🛡️ Anchor review directly to the PR's HEAD commit to prevent 422 rejections
+                body: "🤖 **Gemini AI Code Quality & Security Audit**\n\nI have evaluated your changes. Please review the line-by-line suggestions below to ensure compliance with our cluster standards.",
+                event: 'COMMENT',
+                comments: comments
+              });
+            } catch (error) {
+              if (error.status === 422) {
+                console.log("⚠️ 422 Error: GitHub API rejected line-by-line review comments.");
+                console.log("🔄 Self-Healing: Falling back to a unified top-level PR summary comment to preserve findings...");
+                
+                let summaryBody = "🤖 **Gemini AI Code Quality & Security Audit (Summary Fallback)**\n\n" +
+                                  "Some review comments could not be attached directly to their lines. Please find the compiled list of findings below:\n\n" +
+                                  "### 📊 Summary of Findings\n\n" +
+                                  "| Severity | File | Line | Finding / Message |\n" +
+                                  "| :--- | :--- | :---: | :--- |\n";
+                
+                for (const item of sortedComments) {
+                  const sevLabel = item.severity === 'CRITICAL' ? '🔴 **CRITICAL**' : '🟡 **WARNING**';
+                  const firstLine = item.message.split('\n')[0].replace(/[*`#_]/g, '').trim();
+                  const shortTitle = firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
+                  summaryBody += `| ${sevLabel} | \`${item.file}\` | \`${item.line}\` | ${shortTitle} |\n`;
+                }
+                
+                summaryBody += "\n---\n\n### 🔍 Detailed Audit Report\n\n";
+                
+                for (const item of sortedComments) {
+                  const sevLabel = item.severity === 'CRITICAL' ? '🔴 CRITICAL' : '🟡 WARNING';
+                  summaryBody += `<details open>\n` +
+                                 `<summary><b>${sevLabel}: <code>${item.file}</code> (Line ${item.line})</b></summary>\n\n` +
+                                 `${item.message}\n\n` +
+                                 `</details>\n\n`;
+                }
+                
+                await github.rest.pulls.createReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  body: summaryBody,
+                  event: 'COMMENT'
+                });
+              } else {
+                throw error;  // Re-throw fatal non-422 exceptions
+              }
+            }

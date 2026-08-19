@@ -17,7 +17,7 @@ if [[ "$COMMIT_MSG" =~ ^Merge[[:space:]] ]] || \
 fi
 
 # Check if commit message contains Azure Boards ticket reference (AB#<number>)
-if [[ ! "$COMMIT_MSG" =~ AB\\#[0-9]+ ]]; then
+if [[ ! "$COMMIT_MSG" =~ AB#[0-9]+ ]]; then
     echo "===============================================================================" >&2
     echo "❌ [Git Hook Error] Commit blocked due to missing Work Item reference!" >&2
     echo "===============================================================================" >&2
@@ -34,3 +34,4 @@ if [[ ! "$COMMIT_MSG" =~ AB\\#[0-9]+ ]]; then
     echo "===============================================================================" >&2
     exit 1
 fi
+

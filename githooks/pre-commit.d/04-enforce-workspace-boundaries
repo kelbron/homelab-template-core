@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# templates/githooks/pre-commit.d/04-enforce-workspace-boundaries
+# Central compliance task to execute workstation Secret Leak audits.
+
+set -euo pipefail
+
+# Force safe system fallback locales
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AUDIT_SCRIPT="${REPO_ROOT}/scripts/workstation/audit-workspace-boundaries.sh"
+
+if [ -f "$AUDIT_SCRIPT" ]; then
+    chmod +x "$AUDIT_SCRIPT"
+    "$AUDIT_SCRIPT"
+else
+    echo "❌ CRITICAL ERROR: Core repository governance script is missing at '$AUDIT_SCRIPT'!"
+    echo "   To restore your workspace linter gates, pull the missing scripts from the template repo."
+    exit 1
+fi

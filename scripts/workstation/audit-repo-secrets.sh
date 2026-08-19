@@ -18,7 +18,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}=====================================================================${NC}"
-echo -e "${BLUE}🛡️  HOMELAB REPOSITORY SECURITY & SECRETS AUDIT GATE ${NC}"
+echo -e "${BLUE}🛡️  HOMELAB REPOSITORY SECURITY & SECRETS AUDIT GATE${NC}"
 echo -e "${BLUE}=====================================================================${NC}"
 
 # Check if inside a git repo
@@ -36,6 +36,8 @@ FAILED=0
 
 # Step 1: Active Tracking Audit
 echo -e "\n${BLUE}🔎 Step 1: Checking for actively tracked sensitive files...${NC}"
+# Checks if Git is tracking any files that match sensitive structural patterns
+# Fixes folder path collisions (like external-secrets) by matching specific extensions/filenames
 TRACKED_SECRETS=$(git ls-files | grep -E '(\.tfvars$|\.env$|\.tfstate$|id_rsa|id_ed25519|\.pem$|\.key$|vault-keys\.json|\.kdbx$)' || true)
 
 if [ -n "$TRACKED_SECRETS" ]; then
@@ -54,12 +56,14 @@ fi
 
 # Step 2: Gitignore Enforcement Audit
 echo -e "\n${BLUE}🔎 Step 2: Verifying .gitignore coverage for sensitive files...${NC}"
+# Scans for local credential files that might exist on disk but are not blocked by gitignore rules
 EXISTING_SECRETS=$(find . -type f \( -name "*.env" -o -name "*.tfvars" -o -name "*.tfstate" -o -name "vault-keys.json" -o -name "*.kdbx" \) -not -path '*/.*' -not -path '*/node_modules/*' || true)
 
 if [ -n "$EXISTING_SECRETS" ]; then
     UNIGNORED_SECRETS=""
     while IFS= read -r file; do
         [ -z "$file" ] && continue
+        # git check-ignore returns 0 if ignored, 1 if not ignored
         if ! git check-ignore -q "$file"; then
             UNIGNORED_SECRETS="${UNIGNORED_SECRETS}\n  - $file"
         fi
@@ -79,20 +83,37 @@ fi
 
 # Step 3: High-Entropy Plaintext Scan
 echo -e "\n${BLUE}🔎 Step 3: Scanning files for high-entropy strings and plaintext patterns...${NC}"
+# Searches for plain-text password/token assignments in tracked and untracked non-ignored files
 PATTERN="(password|token|pat|client_secret|client-secret|clientid|client-id|access_key|access-key|api-token|api_token)[[:space:]]*=[[:space:]]*[\"'][a-zA-Z0-9_-]{8,128}[\"']"
 
-SUSPICIOUS_LINES=$(git grep -E -n -i "$PATTERN" -- '*.tf' '*.sh' '*.yaml' '*.yml' '*.env' '*.json' 2>/dev/null || true)
+
+SUSPICIOUS_LINES=""
+# Locate all tracked and untracked non-ignored files of interest
+FILE_LIST=$(git ls-files -c -o --exclude-standard | grep -E '\.(tf|sh|yaml|yml|env|json)$' || true)
+
+if [ -n "$FILE_LIST" ]; then
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        [ -f "$line" ] || continue
+        # Perform grep and prefix with filename
+        MATCHES=$(grep -E -n -i "$PATTERN" "$line" 2>/dev/null | sed "s|^|${line}:|" || true)
+        if [ -n "$MATCHES" ]; then
+            if [ -z "$SUSPICIOUS_LINES" ]; then
+                SUSPICIOUS_LINES="$MATCHES"
+            else
+                SUSPICIOUS_LINES="${SUSPICIOUS_LINES}\n${MATCHES}"
+            fi
+        fi
+    done <<< "$FILE_LIST"
+fi
 
 if [ -n "$SUSPICIOUS_LINES" ]; then
     echo -e "${YELLOW}⚠️  POTENTIAL PLAIN-TEXT SECRET LEAKS DETECTED:${NC}"
-    echo -e "${YELLOW}The following tracked lines seem to assign sensitive strings in plain text:${NC}"
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        echo -e "  - $line"
-    done <<< "$SUSPICIOUS_LINES"
+    echo -e "${YELLOW}The following files contain matching plain-text sensitive patterns:${NC}"
+    echo -e "$SUSPICIOUS_LINES"
     echo -e "${YELLOW}👉 Ensure these values are abstracted into variables/Azure Key Vault references!${NC}"
 else
-    echo -e "${GREEN}✅ Clean! No obvious plain-text password/token assignments found in tracked files.${NC}"
+    echo -e "${GREEN}✅ Clean! No obvious plain-text password/token assignments found in tracked or staged files.${NC}"
 fi
 
 # Step 4: Line Normalization Check
