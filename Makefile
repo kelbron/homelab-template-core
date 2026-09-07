@@ -9,15 +9,15 @@
 UID := $(shell id -u)
 # Dynamic workspace hashing for isolation (macOS and Linux compliant)
 WORKSPACE_HASH := $(shell (printf '%s' "$(CURDIR)" | sha256sum 2>/dev/null || printf '%s' "$(CURDIR)" | shasum -a 256 2>/dev/null || echo "default") | cut -c1-8)
-SECURE_TMP_DIR := /tmp/ops-$(WORKSPACE_HASH)-$(UID)
+SECURE_TMP_DIR := /tmp/ops-$(UID)-$(WORKSPACE_HASH)
 # Ensure the secure directory exists with strict permissions (drwx------) before evaluating paths
-_prep_secure_tmp := $(shell mkdir -p $(SECURE_TMP_DIR) && chmod 700 $(SECURE_TMP_DIR))
+_prep_secure_tmp := $(shell mkdir -m 700 -p $(SECURE_TMP_DIR))
 
 # =============================================================================
 # DEFAULT WORKSPACE PARAMETERS (Fallback Defaults)
 # =============================================================================
-REQUIRED_TOOLS ?= shellcheck git
-OPTIONAL_TOOLS ?= python3
+REQUIRED_TOOLS ?= shellcheck git python3
+OPTIONAL_TOOLS =
 
 FORCE ?= false			## [Optional] Bypass safety checks and run-once safety locks. Choices: [true, false]. Default: false
 CI ?= false 			## [Optional] CI/CD Mode. Bypasses local file-sourcing. Choices: [true, false]. Default: false
@@ -80,11 +80,41 @@ $(if $(MISSING_REQUIRED),\
 )
 endef
 
+# ensure that if python is installed that it has venv and pip
+define audit_python
+@if command -v python3 >/dev/null; then \
+	if ! python3 -c "import venv" >/dev/null 2>&1; then \
+		echo "❌ python3 is present, but the 'venv' module is missing."; \
+		echo "👉 Please install it via your package manager (e.g., 'sudo apt install python3-venv') to enable testing."; \
+		exit 1; \
+	fi \
+fi
+endef
+
 # 🛡️ Safe Script Runner: Ensures executability, and runs the script safely
 # Usage: $(call run_script,<script_path>, [optional arguments])
 define run_script
 @test -x $(1) || (echo "🛡️ Fixing stripped execution bit on '$(1)'..." && chmod +x $(1)); \
 $(1) $(2)
+endef
+
+# Print a pytest-style dynamic terminal-width separator line
+# Usage: $(call print_separator,text to center)
+define print_separator
+	@sh -c '\
+		msg=" $(strip $(1)) "; \
+		cols=$${COLUMNS:-$$(stty size 2>/dev/null | cut -d" " -f2)}; \
+		cols=$${cols:-80}; \
+		len=$${#msg}; \
+		if [ $$len -ge $$cols ]; then \
+			printf "%s\n" "$$msg"; \
+		else \
+			pad=$$(( (cols - len) / 2 )); \
+			rem=$$(( cols - len - pad )); \
+			left=$$(printf "%*s" "$$pad" "" | tr " " "="); \
+			right=$$(printf "%*s" "$$rem" "" | tr " " "="); \
+			printf "%s%s%s\n" "$$left" "$$msg" "$$right"; \
+		fi'
 endef
 
 # =============================================================================
@@ -100,13 +130,17 @@ CI           := $(strip $(CI))
 # Locates and includes all '.mk' extension files in the repository root.
 # Uses -include (hyphenated) to prevent Make from crashing on a fresh checkout
 # if no extension files have been fetched or authored yet.
+TEST_MODULE_TARGETS ?=
+CLEAN_MODULE_TARGETS ?=
+
 -include $(wildcard *.mk)
 
 # Sentinel file indicating onboarding compliance
 SETUP_SENTINEL := .setup_done
 
-.PHONY: setup setup-githooks check-workstation-tools guard-setup test help \
-		clean clean_core clean_modules _is_secure_tmp_safe _is_build_dir_safe
+.PHONY: setup setup-githooks check-workstation-tools guard-setup help \
+		test test_core test_modules \
+		clean clean_core clean_modules
 
 .DEFAULT_GOAL := help
 
@@ -127,6 +161,15 @@ help: ## Display this help message with target descriptions
 # ==============================================================================
 
 setup: check-workstation-tools setup-githooks ## Bootstrap local WSL workspace and prepare development plane
+	@if [ ! -d ".venv" ]; then \
+		echo "📦 Provisioning isolated Python Virtual Environment...";\
+		python3 -m venv .venv; \
+		.venv/bin/pip install -U pip setuptools > .venv/pip-bootstrap.log 2>&1 || { cat .venv/pip-bootstrap.log; exit 1; }; \
+		.venv/bin/pip install -e . pytest ruff >> .venv/pip-bootstrap.log 2>&1 || { cat .venv/pip-bootstrap.log; exit 1; }; \
+		echo "🎉 Virtual environment successfully initialized!"; \
+	else \
+		echo "✅ Virtual environment (.venv) already exists."; \
+	fi
 	@touch $(SETUP_SENTINEL)
 	@echo "=========================================================================="
 	@echo "🎉 SUCCESS: Workspace is configured!"
@@ -144,6 +187,7 @@ setup-githooks: ## Activate local Git hooks and map core.hooksPath
 check-workstation-tools: ## Validate if required binaries are present on disk without hard fail
 	@echo "🔎 Auditing workstation binary toolchain..."
 	$(call audit_tools,$(REQUIRED_TOOLS),$(OPTIONAL_TOOLS))
+	$(call audit_python)
 
 # Quietly guard critical targets. Supports FORCE=true to allow pipeline/CI bypasses.
 # This must be the first dependency in any target chain that requires a fully initialized workstation.
@@ -167,11 +211,24 @@ endif
 # ⚙️ DETAILED OPERATIONAL TARGETS
 # ==============================================================================
 
-test: guard-setup ## Run the complete workstation test suite
-	@echo "=== Running Workstation Test Suite ==="
+test_core: guard-setup ## Run the complete workstation test suite
+	@if [ ! -d ".venv" ]; then \
+		echo "🛑 ERROR: Workspace is not initialized. Please run 'make setup' first."; \
+		exit 1; \
+	fi
 	$(call require_tools,python3)
-	python3 -m unittest discover -v -s tests -p "test_*.py"
-	@echo "✅ All unit tests passed successfully!"
+	$(call print_separator, Running Workstation Test Suite)
+	@.venv/bin/pytest tests/
+	@echo "✅ All Python unit tests passed successfully!"
+
+test_modules: guard-setup
+ifneq ($(strip $(TEST_MODULE_TARGETS)),)
+	$(call print_separator,Running Module Test Suites)
+	@$(MAKE) --no-print-directory $(TEST_MODULE_TARGETS)
+endif
+
+test: test_core test_modules
+	$(call print_separator,✅ Testing complete)
 
 # ==============================================================================
 # 🧹 CLEANUP CONTROLS
@@ -180,17 +237,23 @@ test: guard-setup ## Run the complete workstation test suite
 # 🛡️ Pure GNU Make-level path safety checkers (No subshell spawn overhead, completely decoupled)
 is_secure_tmp_safe = $(and $(1),$(filter /tmp/%,$(1)),$(filter-out /tmp /tmp/,$(subst //,/,$(subst //,/,$(strip $(1))))))
 
+
+
 clean_core: # Remove decrypted environment caches
-	@echo "🧹 Wiping workspace build artifacts and secure caches..."
+	$(call print_separator, 🧹 Wiping workspace build artifacts and secure caches)
+# 	Only purge SECURE_TMP_DIR if it is strictly a safe /tmp subdirectory
+	@if [ -n "$(call is_secure_tmp_safe,$(SECURE_TMP_DIR))" ]; then \
+		rm -rf "$(SECURE_TMP_DIR)" && echo "✅ Purged secure temp directory: $(SECURE_TMP_DIR)"; \
+	else \
+		echo "⚠️ Skipped SECURE_TMP_DIR purge: Path is empty or unsafe or outside /tmp/"; \
+	fi
 
-	# Only purge SECURE_TMP_DIR if it is strictly a safe /tmp subdirectory
-	$(if $(call is_secure_tmp_safe,$(SECURE_TMP_DIR)),\
-		@rm -rf "$(SECURE_TMP_DIR)" && echo "✅ Purged secure temp directory: $(SECURE_TMP_DIR)",\
-		@echo "⚠️ Skipped SECURE_TMP_DIR purge: Path is empty, unsafe, or outside /tmp/"\
-	)
 
-clean_modules::
-	@echo "🧹 Cleaning child modules"
+clean_modules:
+ifneq ($(strip $(CLEAN_MODULE_TARGETS)),)
+	$(call print_separator,🧹 Cleaning child modules)
+	@$(MAKE) --no-print-directory $(CLEAN_MODULE_TARGETS)
+endif
 
 clean: clean_core clean_modules ## Remove temporary build files and decrypted environment caches
-	@echo "✅ Clean complete."
+	$(call print_separator,✅ Clean complete)

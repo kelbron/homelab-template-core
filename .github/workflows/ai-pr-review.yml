@@ -36,7 +36,7 @@ jobs:
     needs: check-credentials
     if: needs.check-credentials.outputs.enabled == 'true'
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: read
       pull-requests: write
@@ -69,8 +69,8 @@ jobs:
           python-version: "3.12"
       - name: "Consult Gemini for Code Quality & Security Review"
         run: |
-          # Executes the companion Python script, feeding it the PR diff 
-          # Note: Underlying script query_gemini_review.py natively executes 
+          # Executes the companion Python script, feeding it the PR diff
+          # Note: Underlying script query_gemini_review.py natively executes
           # exponential backoff with jitter on transient 503/429 errors.
           python3 scripts/workstation/query_gemini_review.py \
             --diff-path "$GEMINI_DIFF_PATH" \
@@ -127,7 +127,7 @@ jobs:
                 pull_number: context.payload.pull_request.number,
                 commit_id: context.payload.pull_request.head.sha, // 🛡️ Anchor review directly to the PR's HEAD commit to prevent 422 rejections
                 body: "🤖 **Gemini AI Review**: Clean bill of health! No syntax issues, credential leaks, or architectural anti-patterns detected.",
-                event: 'APPROVE'
+                event: 'COMMENT'
               });
               return;
             }
@@ -147,7 +147,7 @@ jobs:
             }
 
             console.log(`Publishing ${comments.length} line-by-line annotations from '${path}'...`);
-            
+
             // 🛡️ Self-healing Fallback Loop (Handles 422 Unprocessable Entity for offset lines)
             try {
               await github.rest.pulls.createReview({
@@ -163,22 +163,22 @@ jobs:
               if (error.status === 422) {
                 console.log("⚠️ 422 Error: GitHub API rejected line-by-line review comments.");
                 console.log("🔄 Self-Healing: Falling back to a unified top-level PR summary comment to preserve findings...");
-                
+
                 let summaryBody = "🤖 **Gemini AI Code Quality & Security Audit (Summary Fallback)**\n\n" +
                                   "Some review comments could not be attached directly to their lines. Please find the compiled list of findings below:\n\n" +
                                   "### 📊 Summary of Findings\n\n" +
                                   "| Severity | File | Line | Finding / Message |\n" +
                                   "| :--- | :--- | :---: | :--- |\n";
-                
+
                 for (const item of sortedComments) {
                   const sevLabel = item.severity === 'CRITICAL' ? '🔴 **CRITICAL**' : '🟡 **WARNING**';
                   const firstLine = item.message.split('\n')[0].replace(/[*`#_]/g, '').trim();
                   const shortTitle = firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
                   summaryBody += `| ${sevLabel} | \`${item.file}\` | \`${item.line}\` | ${shortTitle} |\n`;
                 }
-                
+
                 summaryBody += "\n---\n\n### 🔍 Detailed Audit Report\n\n";
-                
+
                 for (const item of sortedComments) {
                   const sevLabel = item.severity === 'CRITICAL' ? '🔴 CRITICAL' : '🟡 WARNING';
                   summaryBody += `<details open>\n` +
@@ -186,7 +186,7 @@ jobs:
                                  `${item.message}\n\n` +
                                  `</details>\n\n`;
                 }
-                
+
                 await github.rest.pulls.createReview({
                   owner: context.repo.owner,
                   repo: context.repo.repo,

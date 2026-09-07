@@ -5,10 +5,14 @@ import tempfile
 import unittest
 from builtins import FileNotFoundError
 from pathlib import Path
-from tests.support import enforce_test_toolchain
+from typing import ClassVar
+
+from tests.support.support import enforce_test_toolchain
+
+
 class TestMakefileClean(unittest.TestCase):
 
-    HARD_REQUIREMENTS = ["make"]
+    HARD_REQUIREMENTS: ClassVar[list[str]] = ["make"]
 
     @classmethod
     def setUpClass(cls):
@@ -65,6 +69,7 @@ test-secure-tmp-macro:
             self.write_test_harness(path)
             result = subprocess.run(
                 ["make", "-f", "Makefile.test", "test-secure-tmp-macro"],
+                check=False,
                 cwd=self.test_dir,
                 capture_output=True,
                 text=True
@@ -76,6 +81,7 @@ test-secure-tmp-macro:
             self.write_test_harness(path)
             result = subprocess.run(
                 ["make", "-f", "Makefile.test", "test-secure-tmp-macro"],
+                check=False,
                 cwd=self.test_dir,
                 capture_output=True,
                 text=True
@@ -96,6 +102,7 @@ test-secure-tmp-macro:
 
             result = subprocess.run(
                 ["make", "clean", f"SECURE_TMP_DIR={secure_tmp}"],
+                check=False,
                 cwd=self.test_dir,
                 capture_output=True,
                 text=True
@@ -113,6 +120,7 @@ test-secure-tmp-macro:
         for path in unsafe_paths:
             result = subprocess.run(
                 ["make", "clean", f"SECURE_TMP_DIR={path}", "BUILD_DIR=dummy-nonexistent", "USE_PROFILES=false"],
+                check=False,
                 cwd=self.test_dir,
                 capture_output=True,
                 text=True
@@ -121,7 +129,7 @@ test-secure-tmp-macro:
             self.assertIn("⚠️ Skipped SECURE_TMP_DIR purge:", result.stdout)
 
     def test_live_clean_cache_extension(self):
-        """Test that running 'make clean' with an override to clean-cache calls both definitions"""
+        """Test that running 'make clean' with registered module targets calls both definitions"""
         build_dir = "test-build-relative-folder-xyz"
         target_path = self.test_dir / build_dir
         target_path.mkdir(parents=True, exist_ok=True)
@@ -129,8 +137,13 @@ test-secure-tmp-macro:
 
         # 🔗 Dynamically provision a mock k3s.mk to hook into the double-colon target
         # This isolates testing to the modular CLEAN mechanism itself!
-        mk_content = f"""
-clean_modules::
+        mk_content = """
+
+.PHONY: clean-module-k3s
+
+CLEAN_MODULE_TARGETS += clean-module-k3s
+
+clean-module-k3s:
 	@rm -rf "$(BUILD_DIR)";
 	echo "✅ Purged local build directory: $(BUILD_DIR)";
 """
@@ -138,6 +151,7 @@ clean_modules::
 
         result = subprocess.run(
             ["make", "clean", "SECURE_TMP_DIR=dummy-secure-nonexistent", f"BUILD_DIR={build_dir}"],
+            check=False,
             cwd=self.test_dir,
             capture_output=True,
             text=True
@@ -145,7 +159,7 @@ clean_modules::
         self.assertEqual(result.returncode, 0, f"Make clean failed: {result.stderr}")
         self.assertIn("⚠️ Skipped SECURE_TMP_DIR purge:", result.stdout)
         self.assertIn(f"✅ Purged local build directory: {build_dir}", result.stdout)
-        self.assertIn("✅ Clean complete.", result.stdout)
+        self.assertIn("✅ Clean complete", result.stdout)
         self.assertFalse(target_path.exists())
 
 if __name__ == "__main__":

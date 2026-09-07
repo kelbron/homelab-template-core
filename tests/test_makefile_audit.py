@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from builtins import FileNotFoundError
 from pathlib import Path
-from tests.support import enforce_test_toolchain
+from tests.support.support import enforce_test_toolchain
 
 class TestMakefileAudit(unittest.TestCase):
 

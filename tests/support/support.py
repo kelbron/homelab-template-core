@@ -1,4 +1,3 @@
-# tests/support.py
 import os
 import shutil
 import functools
@@ -6,7 +5,7 @@ import unittest
 
 def get_missing_binaries(binaries):
     """Returns a list of any specified binaries that are not on the system PATH."""
-    return [bin for bin in binaries if not shutil.which(bin)]
+    return [binary for binary in binaries if not shutil.which(binary)]
 
 def enforce_test_toolchain(hard_requirements, soft_requirements=None):
     """

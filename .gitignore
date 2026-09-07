@@ -48,11 +48,29 @@ terraform.rc
 # Built Visual Studio Code Extensions
 *.vsix
 
-# Python compilation and test cache
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
+# Python build and package artifacts
+*.egg-info/
+*.egg
+build/
+dist/
+wheels/
+*.whl
 
-# workstation setup sentinel file
-.setup_done
+# Python caches and virtual environments
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# build directory
+/build/
+
+
+# local folder that we do not want to be under vc
+.local/
+
+# BATS runtime
+.bats/

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-import os
-import sys
-import json
 import argparse
-import urllib.request
-import urllib.error
-import time
+import json
+import os
 import random
 import re
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -140,7 +142,7 @@ def filter_suppressed_comments(review_data, changed_lines, repo_root="."):
                 if "ai-ignore" in target_line:
                     print(f"🔇 Suppressed AI comment on {filename}:{line_num_int} due to inline 'ai-ignore' override.")
                     continue
-        except Exception as e:
+        except (OSError, UnicodeDecodeError) as e:
             print(f"⚠️ Warning reading file {filename} during suppression check: {e}", file=sys.stderr)
 
         filtered_comments.append(comment)
@@ -198,6 +200,23 @@ def sanitize_json_response(text):
 
     return "".join(fixed)
 
+def extract_retry_delay(err_body: str, headers) -> float:
+    # 1. Check HTTP header first
+    retry_after = headers.get("Retry-After") if headers else None
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
+
+    # 2. Extract suggested delay from Google's response message (e.g., "retry in 14.2s")
+    match = re.search(r"retry in (\d+(?:\.\d+)?)s", err_body, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+
+    # 3. Default safe duration to clear rolling TPM limits if unspecified
+    return 60.0
+
 def main():
     args = parse_args()
 
@@ -215,7 +234,7 @@ def main():
     default_output = {"comments": []}
     try:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    except Exception:
+    except OSError:
         pass
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -238,37 +257,44 @@ def main():
         print("✅ No code additions or changes found in diff to analyze.")
         return
 
-    prompt = f"""You are an expert DevOps and Platform Engineer auditing code quality, syntax, security, and architectural anti-patterns in a Kubernetes homelab.
+    prompt = f"""You are an automated PR review engine providing inline feedback on a GitHub pull request diff.
+Your output JSON is parsed directly by an automated GitHub workflow to post inline PR review comments.
+Assume this code was authored by a senior systems engineer and has already passed strict ShellCheck validation.
+Your baseline default output is an empty list: {{"comments": []}}.
 
-Perform an exhaustive, line-by-line pass of the diff. Do not stop after finding the first few issues. You must report EVERY valid issue you find, even minor formatting, style violations, or optimization points. Aim to populate the 'comments' array with all detected discrepancies. Do not summarize or group distinct issues into a single comment.
+TASK:
+Identify ONLY genuine functional bugs, security vulnerabilities (CWE), data-loss hazards, or unhandled runtime crashes.
+Do NOT report stylistic preferences, micro-optimizations, educational notes, or defensive idioms.
 
-Focus on:
-1. POSIX-safe shell scripting (avoiding bash-isms like '&>' in standard /bin/sh recipes).
-2. Safe environment sourcing and dynamic configurations in Makefiles.
-3. Terraform module declarations, ensuring required arguments are populated and secrets are sensitive.
-4. Kubernetes manifest security (avoiding hardcoded secrets or privileged contexts).
+CLASSIFICATION:
+- 'CRITICAL': Security vulnerabilities (CWE), command injections, credential leaks, or fatal syntax/runtime crashes.
+- 'WARNING': Definite logic errors, race conditions, or unhandled execution paths that result in corrupted state or broken services.
+(NOTE: If an observation is merely an optimization, style preference, architectural suggestion, or non-fatal edge case, it is DISQUALIFIED. Do not post it.)
 
-⚠️ CRITICAL CONTEXT: YOU ARE ANALYZING A RAW GIT DIFF, NOT A COMPLETE FILE.
-The first line of any code block you see is NOT necessarily the first line of the file. To prevent false positives, adhere strictly to these rules:
-- Do NOT flag "missing shebangs" (e.g., #!/bin/bash) on shell scripts unless you explicitly see the shebang being deleted in the diff.
-- Do NOT flag "missing imports" or "missing variables" if they might be declared in lines of the file that are outside the current diff hunks.
-- Only report definitive syntax errors, security flaws (CWE), or credential leaks visible within the modified lines.
+MANDATORY SUPPRESSION RULES:
+1. Defensive Traps & Cleanup: Never flag 'trap ... EXIT' combined with explicit deletion as redundant, racing, or interfering with recovery. Idempotent cleanup is standard architecture.
+2. Tooling Invariants:
+   - GNU envsubst: '$VAR' matches both '$VAR' and '${{VAR}}'. Do not report brace mismatches.
+   - Shell: Do not flag unquoted assignments, variables inside '[[ ]]', or missing files/imports outside the diff hunks.
+3. Guarded Logic: Do not critique string parsing or loops if validation checks already reject empty or malformed values.
+4. Falsification Requirement: Verify the literal text of the diff. Never claim a flag, quote, or check is missing if it physically appears in the diff.
 
-Identify issues and classify them strictly as:
-- 'CRITICAL': Security vulnerabilities, credential leaks, or fatal syntax errors.
-- 'WARNING': Architectural style drift, optimizations, or style issues.
+OUTPUT FORMAT:
+Return valid JSON only matching the schema consumed by GitHub Actions. Every comment must include a reproducible failure proof showing how an unhandled crash or state corruption occurs:
 
-You must return your output strictly in JSON format. Do not wrap your response in markdown code blocks. The JSON structure must match this exact schema:
 {{
   "comments": [
     {{
-      "file": "filename",
-      "line": line_number_integer,
-      "severity": "CRITICAL or WARNING",
-      "message": "Markdown warning/error string"
+      "path": "path/to/file",
+      "line": 123,
+      "severity": "CRITICAL" | "WARNING",
+      "message": "### [SEVERITY]\n**Failure Proof:** <Concrete input/state showing reproducible crash or data corruption>\n\n**Issue:** <Explanation of defect and corrective action>"
     }}
   ]
 }}
+
+If no genuine defects meet this standard, return:
+{{"comments": []}}
 
 Analyze only the lines showing additions or changes in this PR. You MUST map each comment 'file' and 'line' to the exact lines listed below. Do not comment on any file or line number that is not listed below. If no issues are found, return an empty comments list.
 
@@ -291,7 +317,30 @@ For larger context, here is the full unified diff of the changes:
             "parts": [{"text": prompt}]
         }],
         "generationConfig": {
-            "responseMimeType": "application/json"
+            "thinkingConfig": {
+                "thinkingBudget" : 512
+            },
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "comments": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "file": {"type": "STRING"},
+                                "line": {"type": "INTEGER"},
+                                "severity": {"type": "STRING", "enum": ["CRITICAL", "WARNING"]},
+                                "message": {"type": "STRING"}
+                            },
+                            "required": ["file", "line", "severity", "message"]
+                        }
+                    }
+                },
+                "required": ["comments"]
+            }
         }
     }
 
@@ -305,15 +354,35 @@ For larger context, here is the full unified diff of the changes:
     max_retries = 5
     initial_delay = 2.0
     backoff_factor = 2.0
+    # Allow 240s for large unified diffs + reasoning time
+    socket_timeout = 240
+
+    encoded_data = json.dumps(payload).encode("utf-8")
 
     for attempt in range(max_retries):
         try:
             print(f"🚀 Sending diff from '{diff_path}' to Gemini API ({api_version}/{model}) for secure analysis (Attempt {attempt + 1}/{max_retries})...")
             # 🛡️ Safe timeout set to 90 seconds to allow the LLM ample processing time on larger structured payloads
-            with urllib.request.urlopen(req, timeout=90) as response:
+
+            # Construct a fresh Request object per attempt
+            req = urllib.request.Request(
+                url,
+                data=encoded_data,
+                headers=headers,
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=socket_timeout) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
 
-            text_response = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # text_response = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            candidate = res_data.get("candidates", [{}])[0]
+            parts = candidate.get("content", {}).get("parts", [])
+            if not parts:
+                finish_reason = candidate.get("finishReason", "UNKNOWN")
+                print(f"⚠️ Warning: Model returned no content parts. Finish reason: {finish_reason}", file=sys.stderr)
+                return
+            text_response = parts[0].get("text", "").strip()
 
             # Sanitize LLM formatting failures before parsing
             sanitized_response = sanitize_json_response(text_response)
@@ -329,25 +398,41 @@ For larger context, here is the full unified diff of the changes:
             break
 
         except urllib.error.HTTPError as e:
-            if e.code in [429, 503] and attempt < max_retries - 1:
+            err_body = e.read().decode("utf-8", errors="replace")
+
+            if attempt < max_retries - 1:
+                if e.code == 429:
+                    suggested_delay = extract_retry_delay(err_body, e.headers)
+                    # Enforce a minimum floor of 60s for full TPM quota resets, plus jitter
+                    sleep_time = max(suggested_delay, 60.0) + random.uniform(1.0, 3.0)
+                    print(f"⏳ Rate limit reached (HTTP 429). Waiting {sleep_time:.2f}s for quota window to reset...", file=sys.stderr)
+                    time.sleep(sleep_time)
+                    continue
+
+                elif e.code in [429, 500, 502, 503, 504] and attempt < max_retries - 1:
+                    sleep_time = initial_delay * (backoff_factor ** attempt) + random.uniform(0.1, 1.0)
+                    print(f"⚠️ Gemini API returned transient error HTTP {e.code} ({e.reason}). Retrying in {sleep_time:.2f}s...", file=sys.stderr)
+                    time.sleep(sleep_time)
+                    continue
+            else:
+                print(f"❌ API HTTP Error: {e.code} - {err_body}", file=sys.stderr)
+                sys.exit(1)
+
+        # Catch both URLError and direct socket/TimeoutError exceptions
+        except (urllib.error.URLError, TimeoutError) as e:
+            err_msg = str(getattr(e, "reason", e))
+            is_timeout = isinstance(e, (TimeoutError, socket.timeout)) or "timed out" in err_msg.lower()
+
+            if is_timeout and attempt < max_retries - 1:
                 sleep_time = initial_delay * (backoff_factor ** attempt) + random.uniform(0.1, 1.0)
-                print(f"⚠️ Gemini API returned transient error HTTP {e.code} ({e.reason}). Retrying in {sleep_time:.2f}s...", file=sys.stderr)
+                print(f"⚠️ Socket read operation timed out after {socket_timeout}s. Retrying in {sleep_time:.2f}s...", file=sys.stderr)
                 time.sleep(sleep_time)
                 continue
             else:
-                print(f"❌ API HTTP Error: {e.code} - {e.read().decode('utf-8')}", file=sys.stderr)
+                print(f"❌ Connection/Socket Error: {err_msg}", file=sys.stderr)
                 sys.exit(1)
-        except urllib.error.URLError as e:
-            # Handle read operation or socket connection timeouts cleanly with retries
-            if "timed out" in str(e.reason).lower() and attempt < max_retries - 1:
-                sleep_time = initial_delay * (backoff_factor ** attempt) + random.uniform(0.1, 1.0)
-                print(f"⚠️ API Socket Connection timed out ({e.reason}). Retrying in {sleep_time:.2f}s...", file=sys.stderr)
-                time.sleep(sleep_time)
-                continue
-            else:
-                print(f"❌ Connection Error: {e.reason}", file=sys.stderr)
-                sys.exit(1)
-        except Exception as e:
+
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError, KeyError, IndexError) as e:
             print(f"❌ Error during AI review processing: {e}", file=sys.stderr)
             sys.exit(1)
 
