@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Maintain GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    # Commit message conventions
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    # Pin pull requests to immutable SHAs rather than version tags
+    versioning-strategy: "lockfile-only"
+

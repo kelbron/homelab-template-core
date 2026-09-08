@@ -176,6 +176,9 @@ setup: check-workstation-tools setup-githooks ## Bootstrap local WSL workspace a
 	@echo "=========================================================================="
 
 setup-githooks: ## Activate local Git hooks and map core.hooksPath
+ifeq ($(CI),true)
+	@echo "🟢 CI/CD environment detected. Bypassing Git hooks registration."
+else
 	@echo "⚓ Activating local workstation Git hooks..."
 	$(call require_tools,git)
 	@chmod +x githooks/pre-commit githooks/commit-msg 2>/dev/null || true
@@ -183,6 +186,7 @@ setup-githooks: ## Activate local Git hooks and map core.hooksPath
 	@chmod +x scripts/workstation/*.sh 2>/dev/null || true
 	@git config core.hooksPath githooks
 	@echo "✅ Git hooks successfully mapped to 'githooks/' and marked executable!"
+endif
 
 check-workstation-tools: ## Validate if required binaries are present on disk without hard fail
 	@echo "🔎 Auditing workstation binary toolchain..."

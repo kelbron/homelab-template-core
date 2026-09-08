@@ -1,0 +1,85 @@
+name: PR Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate & Validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    # Expose the flag to downstream jobs
+    outputs:
+      has_gemini_key: ${{ steps.check-key.outputs.has_gemini_key }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Determine if the secret is populated without logging the secret value
+      - name: Evaluate AI Review Capability
+        id: check-key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "has_gemini_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_gemini_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Toolchain (mise)
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: true
+
+      - name: Bootstrap Environment
+        run: make setup
+
+      - name: Run Test Suite
+        run: make test
+
+      - name: Static Security Scan (Semgrep OSS)
+        run: semgrep scan --config "p/python" --config "p/owasp-top-ten" --error
+
+      - name: Supply Chain Vulnerability Scan (OSV-Scanner)
+        run: osv-scanner scan -r .
+
+      - name: Demote Premature Full PR to Draft on Failure
+        if: failure() && github.event.pull_request.draft == false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "🚨 **Automated Quality Gate Failed**: Demoting this pull request back to **Draft** status. Please resolve the test failures locally and push an update before requesting review."
+          gh pr ready ${{ github.event.pull_request.number }} --undo
+
+      - name: Promote Draft PR to Ready for Review on Success
+        if: success() && github.event.pull_request.draft == true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr ready ${{ github.event.pull_request.number }}
+
+
+  run-ai-review:
+    name: AI Review
+    needs: quality-gate
+    if: success() && needs.quality-gate.outputs.has_gemini_key == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/ai-pr-review.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.base_ref }}
+    secrets: inherit
