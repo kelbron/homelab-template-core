@@ -51,13 +51,7 @@ jobs:
         run: semgrep scan --config "p/python" --config "p/owasp-top-ten" --error
 
       - name: Supply Chain Vulnerability Scan (OSV-Scanner)
-        run: osv-scanner scan -r . || status=$?
-          if [ "${status:-0}" -eq 128 ]; then
-            echo "No lockfiles found to scan. Skipping."
-            exit 0
-          elif [ "${status:-0}" -ne 0 ]; then
-            exit "$status"
-          fi
+        run: osv-scanner scan -r . || [ $? -eq 128 ] # Exit code 128 indicates no lockfiles found, which is not a failure
 
       - name: Demote Premature Full PR to Draft on Failure
         if: failure() && github.event.pull_request.draft == false
