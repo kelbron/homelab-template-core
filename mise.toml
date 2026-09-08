@@ -1,6 +1,6 @@
 [tools]
 python = "3.14.4"
 bats = "1.13.0"
-ruff = "latest"
-semgrep = "latest"
-osv-scanner = "latest"
+ruff = "0.16.6"
+osv-scanner = "2.5.1"
+"ubi:semgrep/semgrep" = "1.176.1"
