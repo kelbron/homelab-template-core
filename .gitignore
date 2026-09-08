@@ -64,6 +64,8 @@ __pycache__/
 .coverage
 htmlcov/
 
+# workstation setup sentinel file
+.setup_done
 
 # build directory
 /build/
@@ -74,3 +76,6 @@ htmlcov/
 
 # BATS runtime
 .bats/
+
+# exclude local mise overrides
+mise.local.toml
