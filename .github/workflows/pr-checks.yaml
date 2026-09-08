@@ -62,12 +62,18 @@ jobs:
             --body "🚨 **Automated Quality Gate Failed**: Demoting this pull request back to **Draft** status. Please resolve the test failures locally and push an update before requesting review."
           gh pr ready ${{ github.event.pull_request.number }} --undo
 
-      - name: Promote Draft PR to Ready for Review on Success
-        if: success() && github.event.pull_request.draft == true
+      - name: Post Quality Gate Pass Notice
+        if: success()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr ready ${{ github.event.pull_request.number }}
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "### Quality Gate Passed
+          * **Unit & Integration Tests:** Passed
+          * **Static Security Analysis (Semgrep):** Passed
+          * **Supply Chain Scan (OSV-Scanner):** Passed
+
+          Code checks are clean. Automated review will run if configured; otherwise, manual review may proceed."
 
 
   run-ai-review:
