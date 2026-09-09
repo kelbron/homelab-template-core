@@ -15,7 +15,7 @@ on:
         type: string
     secrets:
       GEMINI_API_KEY:
-        required: true        
+        required: true
 
 jobs:
   ai-review:
@@ -30,7 +30,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_DIFF_PATH: "pr_changes.diff"
       GEMINI_OUTPUT_PATH: "review_output.json"
-      GEMINI_MODEL: "gemini-3.6-flash" 
+      GEMINI_MODEL: "gemini-3.6-flash"
       GEMINI_API_VERSION: "v1beta"
 
     steps:
@@ -43,10 +43,10 @@ jobs:
       - name: "Generate PR Diff"
         id: diff
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ inputs.base_ref }}
           GEMINI_DIFF_PATH: build/pr_changes.diff
         run: |
-          # Safely reference the environment variable
+          mkdir -p "$(dirname "$GEMINI_DIFF_PATH")"
           git diff "origin/$BASE_REF...HEAD" > "$GEMINI_DIFF_PATH"
           echo "diff_path=$GEMINI_DIFF_PATH" >> "$GITHUB_OUTPUT"
 
