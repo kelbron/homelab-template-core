@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=none
+
 name: PR Quality Gate
 
 on:
@@ -87,6 +89,6 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
-      base_ref: ${{ github.base_ref }}
+      base_ref: ${{ github.base_ref || github.event.repository.default_branch}}
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
